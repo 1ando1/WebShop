@@ -1,31 +1,40 @@
 ﻿using AutoMapper;
-using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using WebShop.Data;
+using WebShop.Constants;
+using WebShop.Data.Entities.Identity;
 using WebShop.Data.Entities;
 using WebShop.Models;
+using Microsoft.EntityFrameworkCore;
 
 namespace WebShop.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize(Roles = $"{Roles.User}, {Roles.Admin}")]
     public class CategoriesController : ControllerBase
     {
         private readonly IMapper _mapper;
         private readonly AppEFContext _appEFContext;
+        private readonly UserManager<UserEntity> _userManager;
 
-        public CategoriesController(AppEFContext appEFContext, IMapper mapper)
+        public CategoriesController(AppEFContext appEFContext, IMapper mapper,
+            UserManager<UserEntity> userManager)
         {
             _mapper = mapper;
             _appEFContext = appEFContext;
+            _userManager = userManager;
         }
 
         [HttpGet("list")]
         public async Task<IActionResult> GetAll()
         {
+            string userName = User.Claims.First().Value;
+            var user = await _userManager.FindByEmailAsync(userName);
             var model = await _appEFContext.Categories
                 .Where(x => x.IsDeleted == false)
+                .Where(x => x.UserId == user.Id)
                 .OrderBy(x => x.Priority)
                 .Select(x => _mapper.Map<CategoryItemViewModel>(x))
                 .ToListAsync();
@@ -36,7 +45,10 @@ namespace WebShop.Controllers
         [HttpGet("{id}")]
         public async Task<IActionResult> GetById(int id)
         {
+            string userName = User.Claims.First().Value;
+            var user = await _userManager.FindByEmailAsync(userName);
             var model = await _appEFContext.Categories
+                .Where(x => x.UserId == user.Id)
                 .Where(x => x.IsDeleted == false && x.Id == id)
                 .Select(x => _mapper.Map<CategoryItemViewModel>(x))
                 .ToListAsync();
@@ -47,12 +59,15 @@ namespace WebShop.Controllers
         }
 
         [HttpPost("create")]
-        public async Task<ActionResult> Create([FromBody] CategoryCreateItemVM model)
+        public async Task<IActionResult> Create([FromBody] CategoryCreateItemVM model)
         {
+            string userName = User.Claims.First().Value;
+            var user = await _userManager.FindByEmailAsync(userName);
             try
             {
                 var cat = _mapper.Map<CategoryEntity>(model);
                 cat.Image = ImageWorker.SaveImage(model.ImageBase64);
+                cat.UserId = user.Id;
                 await _appEFContext.Categories.AddAsync(cat);
                 await _appEFContext.SaveChangesAsync();
                 return Ok(_mapper.Map<CategoryItemViewModel>(cat));
@@ -65,11 +80,15 @@ namespace WebShop.Controllers
         }
 
         [HttpPut("edit")]
-        public async Task<ActionResult> Edit([FromBody] CategoryEditItemVM model)
+        public async Task<IActionResult> Edit([FromBody] CategoryEditItemVM model)
         {
+            string userName = User.Claims.First().Value;
+            var user = await _userManager.FindByEmailAsync(userName);
             try
             {
-                var cat = await _appEFContext.Categories.FindAsync(model.Id);
+                var cat = await _appEFContext.Categories
+                    .Where(x => x.UserId == user.Id)
+                    .SingleOrDefaultAsync(x => x.Id == model.Id);
                 if (cat == null)
                     return NotFound();
                 else
@@ -82,11 +101,12 @@ namespace WebShop.Controllers
                         ImageWorker.RemoveImage(cat.Image);
                         cat.Image = ImageWorker.SaveImage(model.ImageBase64);
                     }
+
+                    _appEFContext.Categories.Update(cat);
+                    await _appEFContext.SaveChangesAsync();
+                    return Ok(_mapper.Map<CategoryItemViewModel>(cat));
                 }
 
-                _appEFContext.Categories.Update(cat);
-                await _appEFContext.SaveChangesAsync();
-                return Ok(_mapper.Map<CategoryItemViewModel>(cat));
             }
             catch (Exception ex)
             {
@@ -98,10 +118,13 @@ namespace WebShop.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
         {
-            var cat = await _appEFContext.Categories.FindAsync(id);
-            if(cat == null)
+            string userName = User.Claims.First().Value;
+            var user = await _userManager.FindByEmailAsync(userName);
+            var cat = await _appEFContext.Categories
+                   .Where(x => x.UserId == user.Id)
+                   .SingleOrDefaultAsync(x => x.Id == id);
+            if (cat == null)
                 return NotFound();
-
             cat.IsDeleted = true;
             _appEFContext.SaveChanges();
             return Ok();
